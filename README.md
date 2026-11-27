@@ -1,36 +1,17 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PokerOTP — Multi-Unit 4-Digit Buy-In OTP & Running Total Tracker
 
-## Getting Started
+A streamlined, real-time mobile-first web app for poker hosts and players:
 
-First, run the development server:
+1. **Host Room Setup:** Create a room with a custom unique **Room ID or Name** (or auto-generated short ID) and set the **Fixed Buy-In Amount** (e.g. `RM 100`).
+2. **Instant Player Join:** Players join immediately by entering the Room ID/Name + their Player Name (or via a direct invite link).
+3. **Multi-Unit 4-Digit Buy-In OTPs:** Players can request buy-ins as many times as needed, in multiples of the fixed buy-in amount (`1×`, `2×`, `3×`, etc.). Requesting `N×` the fixed buy-in automatically generates **`N` unique 4-digit OTP codes** (e.g. `2×` buy-in generates 2 OTP codes) for the player to read to the host, who writes them down on paper and hands out the chips.
+4. **Live Running Totals:** Every player has a live running total of their buy-ins visible to both the player and the host, synced in real time via Server-Sent Events (SSE).
+
+## Quick Start
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Open `http://localhost:3000` in your browser. To test Host + multiple Players side-by-side in one browser window, click **Launch Demo Room** on the home page or click **Test Player Tabs** inside the Host Console.
