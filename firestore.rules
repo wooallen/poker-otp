@@ -1,0 +1,244 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: rooms/{roomSlug}
+// Document ID: roomSlug (2-48 chars, lowercase slug)
+// Fields:
+//   - roomSlug: string (required, 2-48 chars, immutable)
+//   - roomName: string (required, 6-40 chars, immutable)
+//   - hostUid: string (required, 1-128 chars, == request.auth.uid on create, immutable)
+//   - currency: string (required, == 'RM', immutable)
+//   - fixedBuyIn: number (required, > 0 and <= 1000000, immutable)
+//   - status: string (required, 'OPEN' | 'CLOSED')
+//   - createdAt: string (required, ISO 8601 timestamp string, immutable)
+//   - endedAt: string | null (required, null when OPEN, ISO string when CLOSED)
+//
+// Collection: rooms/{roomSlug}/players/{playerId}
+// Document ID: playerId (1-160 chars)
+// Fields:
+//   - id: string (required, == playerId, immutable)
+//   - roomSlug: string (required, == roomSlug, immutable)
+//   - uid: string (required, == request.auth.uid, immutable)
+//   - displayName: string (required, 1-32 chars, immutable)
+//   - joinedAt: string (required, ISO 8601 timestamp string, immutable)
+//
+// Collection: rooms/{roomSlug}/buyIns/{otpCode}
+// Document ID: otpCode (4-digit string '0000'-'9999' ensuring per-room uniqueness)
+// Fields:
+//   - id: string (required, == otpCode, immutable)
+//   - roomSlug: string (required, == roomSlug, immutable)
+//   - playerId: string (required, 1-160 chars, immutable)
+//   - playerUid: string (required, == request.auth.uid, immutable)
+//   - playerName: string (required, 1-32 chars, immutable)
+//   - batchId: string (required, 1-64 chars, immutable)
+//   - otpCode: string (required, 4 digits == otpCode, immutable)
+//   - amount: number (required, == room.fixedBuyIn, immutable)
+//   - status: string (required, 'ACTIVE' | 'VOIDED')
+//   - createdAt: string (required, ISO 8601 timestamp string, immutable)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string &&
+        dateStr.size() >= 18 &&
+        dateStr.size() <= 35 &&
+        dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidRoom(data, roomSlug) {
+      let fields = [
+        'roomSlug',
+        'roomName',
+        'hostUid',
+        'currency',
+        'fixedBuyIn',
+        'status',
+        'createdAt',
+        'endedAt'
+      ];
+      return hasRequiredFields(fields) &&
+        hasOnlyAllowedFields(fields) &&
+        data.roomSlug is string &&
+        data.roomSlug == roomSlug &&
+        data.roomSlug.size() >= 2 &&
+        data.roomSlug.size() <= 48 &&
+        data.roomName is string &&
+        data.roomName.size() >= 6 &&
+        data.roomName.size() <= 40 &&
+        data.hostUid is string &&
+        data.hostUid.size() >= 1 &&
+        data.hostUid.size() <= 128 &&
+        data.currency == 'RM' &&
+        data.fixedBuyIn is number &&
+        data.fixedBuyIn > 0 &&
+        data.fixedBuyIn <= 1000000 &&
+        data.status in ['OPEN', 'CLOSED'] &&
+        isValidDateString(data.createdAt) &&
+        (
+          (data.status == 'OPEN' && data.endedAt == null) ||
+          (data.status == 'CLOSED' && isValidDateString(data.endedAt))
+        );
+    }
+
+    function isValidPlayer(data, roomSlug, playerId) {
+      let fields = ['id', 'roomSlug', 'uid', 'displayName', 'joinedAt'];
+      return hasRequiredFields(fields) &&
+        hasOnlyAllowedFields(fields) &&
+        data.id is string &&
+        data.id == playerId &&
+        data.id.size() >= 1 &&
+        data.id.size() <= 160 &&
+        data.roomSlug is string &&
+        data.roomSlug == roomSlug &&
+        data.uid is string &&
+        data.uid.size() >= 1 &&
+        data.uid.size() <= 128 &&
+        data.displayName is string &&
+        data.displayName.size() >= 1 &&
+        data.displayName.size() <= 32 &&
+        isValidDateString(data.joinedAt);
+    }
+
+    function isValidBuyIn(data, roomSlug, otpCode) {
+      let fields = [
+        'id',
+        'roomSlug',
+        'playerId',
+        'playerUid',
+        'playerName',
+        'batchId',
+        'otpCode',
+        'amount',
+        'status',
+        'createdAt'
+      ];
+      return hasRequiredFields(fields) &&
+        hasOnlyAllowedFields(fields) &&
+        otpCode.matches("^\\d{4}$") &&
+        data.id == otpCode &&
+        data.otpCode == otpCode &&
+        data.roomSlug == roomSlug &&
+        data.playerId is string &&
+        data.playerId.size() >= 1 &&
+        data.playerId.size() <= 160 &&
+        data.playerUid is string &&
+        data.playerUid.size() >= 1 &&
+        data.playerUid.size() <= 128 &&
+        data.playerName is string &&
+        data.playerName.size() >= 1 &&
+        data.playerName.size() <= 32 &&
+        data.batchId is string &&
+        data.batchId.size() >= 1 &&
+        data.batchId.size() <= 64 &&
+        data.amount is number &&
+        data.amount > 0 &&
+        data.amount <= 1000000 &&
+        data.status in ['ACTIVE', 'VOIDED'] &&
+        isValidDateString(data.createdAt);
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /rooms/{roomSlug} {
+      allow read: if isAuthenticated();
+
+      allow create: if isOwner(request.resource.data.hostUid) &&
+        isValidRoom(request.resource.data, roomSlug) &&
+        request.resource.data.status == 'OPEN' &&
+        request.resource.data.endedAt == null;
+
+      allow update: if isOwner(resource.data.hostUid) &&
+        isValidRoom(request.resource.data, roomSlug) &&
+        areImmutableFieldsUnchanged([
+          'roomSlug',
+          'roomName',
+          'hostUid',
+          'currency',
+          'fixedBuyIn',
+          'createdAt'
+        ]);
+
+      allow delete: if false;
+
+      match /players/{playerId} {
+        allow read: if isAuthenticated();
+
+        allow create: if isOwner(request.resource.data.uid) &&
+          isValidPlayer(request.resource.data, roomSlug, playerId) &&
+          get(/databases/$(database)/documents/rooms/$(roomSlug)).data.status == 'OPEN';
+
+        allow update, delete: if false;
+      }
+
+      match /buyIns/{otpCode} {
+        allow read: if isAuthenticated();
+
+        allow create: if isOwner(request.resource.data.playerUid) &&
+          isValidBuyIn(request.resource.data, roomSlug, otpCode) &&
+          request.resource.data.status == 'ACTIVE' &&
+          get(/databases/$(database)/documents/rooms/$(roomSlug)).data.status == 'OPEN' &&
+          request.resource.data.amount == get(/databases/$(database)/documents/rooms/$(roomSlug)).data.fixedBuyIn &&
+          get(/databases/$(database)/documents/rooms/$(roomSlug)/players/$(request.resource.data.playerId)).data.uid == request.auth.uid;
+
+        allow update: if isAuthenticated() &&
+          get(/databases/$(database)/documents/rooms/$(roomSlug)).data.hostUid == request.auth.uid &&
+          get(/databases/$(database)/documents/rooms/$(roomSlug)).data.status == 'OPEN' &&
+          isValidBuyIn(request.resource.data, roomSlug, otpCode) &&
+          areImmutableFieldsUnchanged([
+            'id',
+            'roomSlug',
+            'playerId',
+            'playerUid',
+            'playerName',
+            'batchId',
+            'otpCode',
+            'amount',
+            'createdAt'
+          ]);
+
+        allow delete: if false;
+      }
+    }
+
+    // Default deny for everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

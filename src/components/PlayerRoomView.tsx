@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Spade,
@@ -15,19 +15,16 @@ import {
 } from "lucide-react";
 import { useRoomStream } from "@/hooks/useRoomStream";
 import {
-  notifySessionChanged,
-  savePlayerToken,
-  useIsHydrated,
-  useStoredHostToken,
-  useStoredPlayerToken,
-} from "@/lib/session";
+  joinRoomInFirestore,
+  requestBuyInsInFirestore,
+} from "@/lib/firestore-service";
+import { markLastPlayerRoom, useIsHydrated } from "@/lib/session";
 import { formatClockTime, formatDateTime, formatMoney } from "@/lib/format";
 import type { GuestRoomSnapshot, PlayerRoomSnapshot } from "@/lib/types";
 
 interface PlayerRoomViewProps {
   roomCode: string;
   seatAlias?: string | null;
-  initialToken?: string | null;
 }
 
 const QUICK_MULTIPLIERS = [1, 2, 3, 4, 5];
@@ -35,13 +32,8 @@ const QUICK_MULTIPLIERS = [1, 2, 3, 4, 5];
 export function PlayerRoomView({
   roomCode,
   seatAlias = null,
-  initialToken = null,
 }: PlayerRoomViewProps) {
   const hydrated = useIsHydrated();
-  const storedPlayerToken = useStoredPlayerToken(roomCode, seatAlias);
-  const hostTokenHere = useStoredHostToken(roomCode);
-  const hasHostTokenHere = Boolean(hostTokenHere);
-  const playerToken = initialToken || storedPlayerToken;
 
   // Direct link join form state
   const [displayName, setDisplayName] = useState("");
@@ -56,18 +48,13 @@ export function PlayerRoomView({
     string | null
   >(null);
 
-  useEffect(() => {
-    if (initialToken) {
-      savePlayerToken(roomCode, initialToken, seatAlias);
-    }
-  }, [roomCode, seatAlias, initialToken]);
-
-  const { snapshot, error, loading, connectionState, refresh } = useRoomStream<
+  const { snapshot, error, loading, connectionState } = useRoomStream<
     PlayerRoomSnapshot | GuestRoomSnapshot
   >({
     roomCode,
-    playerToken,
-    enabled: hydrated,
+    viewRole: "PLAYER",
+    seatAlias,
+    enabled: hydrated && Boolean(roomCode),
   });
 
   const latestBatchOtps = useMemo(() => {
@@ -95,59 +82,39 @@ export function PlayerRoomView({
 
     setJoinLoading(true);
     try {
-      const res = await fetch(
-        `/api/rooms/${encodeURIComponent(roomCode)}/join`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            displayName: displayName.trim(),
-            existingPlayerToken: playerToken,
-          }),
-        }
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        setJoinError(data.error || "Unable to join room.");
-        setJoinLoading(false);
-        return;
+      const res = await joinRoomInFirestore({
+        roomIdOrName: roomCode,
+        displayName: displayName.trim(),
+        seatAlias,
+      });
+      if (!seatAlias) {
+        markLastPlayerRoom(res.room.roomSlug);
       }
-
-      savePlayerToken(data.room.roomSlug, data.playerToken, seatAlias);
-      notifySessionChanged();
       setJoinLoading(false);
-    } catch {
-      setJoinError("Network error joining room.");
+    } catch (err) {
+      setJoinError(
+        err instanceof Error ? err.message : "Unable to join room."
+      );
       setJoinLoading(false);
     }
   }
 
   async function handleRequestBuyIns() {
-    if (!playerToken || multiplier < 1) return;
+    if (multiplier < 1) return;
     setBuyInLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch(
-        `/api/rooms/${encodeURIComponent(roomCode)}/buy-ins`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-player-token": playerToken,
-          },
-          body: JSON.stringify({ quantity: multiplier }),
-        }
+      const res = await requestBuyInsInFirestore({
+        roomIdOrName: roomCode,
+        seatAlias,
+        quantity: multiplier,
+      });
+      setJustGeneratedBatchId(res.batchId);
+      setMultiplier(1);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Could not generate buy-in OTP."
       );
-      const data = await res.json();
-      if (!res.ok) {
-        setErrorMsg(data.error || "Could not generate buy-in OTP.");
-      } else {
-        setJustGeneratedBatchId(data.batchId);
-        setMultiplier(1);
-        void refresh();
-      }
-    } catch {
-      setErrorMsg("Network error requesting buy-in.");
     } finally {
       setBuyInLoading(false);
     }
@@ -161,7 +128,7 @@ export function PlayerRoomView({
     );
   }
 
-  if (error || !snapshot) {
+  if (!roomCode || error || !snapshot) {
     return (
       <main className="max-w-md mx-auto px-4 py-16 text-center">
         <div className="rounded-3xl bg-slate-900 border border-slate-800 p-6 space-y-4">
@@ -256,10 +223,10 @@ export function PlayerRoomView({
             </form>
           )}
 
-          {hasHostTokenHere && !seatAlias && (
+          {snapshot.isAlsoHost && !seatAlias && (
             <div className="mt-5 pt-4 border-t border-slate-800 text-center">
               <Link
-                href={`/room/${encodeURIComponent(room.roomSlug)}/host`}
+                href={`/host?room=${encodeURIComponent(room.roomSlug)}`}
                 className="text-xs font-semibold text-amber-300 hover:text-amber-200"
               >
                 Open Host View for {room.roomName} →

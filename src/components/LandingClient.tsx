@@ -16,10 +16,14 @@ import {
 } from "lucide-react";
 import { toRoomSlug } from "@/lib/codes";
 import {
-  getPlayerToken,
+  createDemoRoomInFirestore,
+  createRoomInFirestore,
+  joinRoomInFirestore,
+} from "@/lib/firestore-service";
+import {
   getRecentSessions,
-  saveHostToken,
-  savePlayerToken,
+  markLastHostRoom,
+  markLastPlayerRoom,
   useIsHydrated,
 } from "@/lib/session";
 
@@ -73,26 +77,16 @@ export function LandingClient() {
 
     setJoinLoading(true);
     try {
-      const existingPlayerToken = getPlayerToken(slug);
-      const res = await fetch(`/api/rooms/${encodeURIComponent(slug)}/join`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          displayName: displayName.trim(),
-          existingPlayerToken,
-        }),
+      const result = await joinRoomInFirestore({
+        roomIdOrName: joinRoomInput,
+        displayName: displayName.trim(),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setJoinError(data.error || "Unable to join room.");
-        setJoinLoading(false);
-        return;
-      }
-
-      savePlayerToken(data.room.roomSlug, data.playerToken);
-      router.push(`/room/${encodeURIComponent(data.room.roomSlug)}`);
-    } catch {
-      setJoinError("Network error while joining room.");
+      markLastPlayerRoom(result.room.roomSlug);
+      router.push(`/room?room=${encodeURIComponent(result.room.roomSlug)}`);
+    } catch (err) {
+      setJoinError(
+        err instanceof Error ? err.message : "Unable to join room."
+      );
       setJoinLoading(false);
     }
   }
@@ -109,26 +103,16 @@ export function LandingClient() {
 
     setCreateLoading(true);
     try {
-      const res = await fetch("/api/rooms", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          roomName: roomName.trim(), // Blank auto-generates a unique short ID on server
-          currency: "RM",
-          fixedBuyIn: buyInNum,
-        }),
+      const room = await createRoomInFirestore({
+        roomName: roomName.trim(),
+        fixedBuyIn: buyInNum,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setCreateError(data.error || "Failed to create room.");
-        setCreateLoading(false);
-        return;
-      }
-
-      saveHostToken(data.room.roomSlug, data.hostToken);
-      router.push(`/room/${encodeURIComponent(data.room.roomSlug)}/host`);
-    } catch {
-      setCreateError("Network error while creating room.");
+      markLastHostRoom(room.roomSlug);
+      router.push(`/host?room=${encodeURIComponent(room.roomSlug)}`);
+    } catch (err) {
+      setCreateError(
+        err instanceof Error ? err.message : "Failed to create room."
+      );
       setCreateLoading(false);
     }
   }
@@ -136,17 +120,8 @@ export function LandingClient() {
   async function handleLaunchDemo() {
     setDemoLoading(true);
     try {
-      const res = await fetch("/api/demo", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
-        setDemoLoading(false);
-        return;
-      }
-
-      saveHostToken(data.roomSlug, data.hostToken);
-      for (const dp of data.demoPlayers) {
-        savePlayerToken(data.roomSlug, dp.playerToken, dp.seatAlias);
-      }
+      const data = await createDemoRoomInFirestore();
+      markLastHostRoom(data.roomSlug);
       try {
         window.localStorage.setItem(
           `demo_roster_${data.roomSlug}`,
@@ -154,8 +129,11 @@ export function LandingClient() {
         );
       } catch {}
 
-      router.push(`/room/${encodeURIComponent(data.roomSlug)}/host?demo=1`);
-    } catch {
+      router.push(`/host?room=${encodeURIComponent(data.roomSlug)}&demo=1`);
+    } catch (err) {
+      setCreateError(
+        err instanceof Error ? err.message : "Failed to seed demo room."
+      );
       setDemoLoading(false);
     }
   }
@@ -180,7 +158,7 @@ export function LandingClient() {
           </div>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-900/90 border border-slate-800 px-3 py-1 text-xs font-medium text-emerald-300">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            Live Sync
+            Live Cloud Sync
           </span>
         </header>
 
@@ -197,14 +175,14 @@ export function LandingClient() {
             <div className="flex flex-wrap gap-2">
               {recentSessions.lastHostRoom && (
                 <Link
-                  href={`/room/${encodeURIComponent(
+                  href={`/host?room=${encodeURIComponent(
                     recentSessions.lastHostRoom
-                  )}/host`}
+                  )}`}
                   className="flex-1 min-w-[160px] inline-flex items-center justify-between gap-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 px-3.5 py-2.5 text-sm font-semibold text-amber-200 transition"
                 >
                   <span className="truncate">
                     Host •{" "}
-                    <span className="font-mono">
+                    <span className="font-mono uppercase">
                       {recentSessions.lastHostRoom}
                     </span>
                   </span>
@@ -213,14 +191,14 @@ export function LandingClient() {
               )}
               {recentSessions.lastPlayerRoom && (
                 <Link
-                  href={`/room/${encodeURIComponent(
+                  href={`/room?room=${encodeURIComponent(
                     recentSessions.lastPlayerRoom
                   )}`}
                   className="flex-1 min-w-[160px] inline-flex items-center justify-between gap-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/30 px-3.5 py-2.5 text-sm font-semibold text-emerald-200 transition"
                 >
                   <span className="truncate">
                     Player •{" "}
-                    <span className="font-mono">
+                    <span className="font-mono uppercase">
                       {recentSessions.lastPlayerRoom}
                     </span>
                   </span>
@@ -273,8 +251,8 @@ export function LandingClient() {
             <div className="mb-5">
               <h2 className="text-xl font-bold text-white">Join Poker Room</h2>
               <p className="text-sm text-slate-400 mt-1">
-                Enter the Room ID or Name from the host to request buy-in OTPs
-                and track your running total.
+                Enter the 6-character Room ID or Room Name from the host to
+                request buy-in OTPs and track your running total.
               </p>
             </div>
 
@@ -341,12 +319,10 @@ export function LandingClient() {
         ) : (
           <section className="rounded-3xl bg-slate-900/90 border border-slate-800/90 p-5 sm:p-6 shadow-2xl shadow-black/50">
             <div className="mb-5">
-              <h2 className="text-xl font-bold text-white">
-                Host Room Setup
-              </h2>
+              <h2 className="text-xl font-bold text-white">Host Room Setup</h2>
               <p className="text-sm text-slate-400 mt-1">
-                Pick a unique Room ID or Name and set the fixed buy-in unit
-                amount.
+                Pick a unique 6+ character Room ID or Name and set the fixed
+                buy-in unit amount.
               </p>
             </div>
 
@@ -441,7 +417,7 @@ export function LandingClient() {
               1. Join Room
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              Enter Room ID/Name &amp; join instantly
+              Enter 6-char ID or Name &amp; join instantly
             </p>
           </div>
           <div className="rounded-2xl bg-slate-900/60 border border-slate-800/80 p-3">
@@ -459,7 +435,7 @@ export function LandingClient() {
               3. Running Total
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              Live buy-in total per player
+              Live totals + PDF summary on close
             </p>
           </div>
         </section>
@@ -484,7 +460,7 @@ export function LandingClient() {
             disabled={demoLoading}
             className="w-full sm:w-auto shrink-0 min-h-[44px] px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm font-semibold text-white transition cursor-pointer"
           >
-            {demoLoading ? "Creating..." : "Launch Demo Room"}
+            {demoLoading ? "Seeding..." : "Launch Demo Room"}
           </button>
         </div>
       </footer>

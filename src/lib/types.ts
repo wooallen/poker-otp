@@ -1,9 +1,11 @@
-import type { BuyInStatus, RoomStatus } from "@/db/schema";
+export type RoomStatus = "OPEN" | "CLOSED";
+export type BuyInStatus = "ACTIVE" | "VOIDED";
 
 export interface PublicRoom {
   id: string;
   roomSlug: string;
   roomName: string;
+  hostUid: string;
   currency: string;
   fixedBuyIn: number;
   status: RoomStatus;
@@ -13,8 +15,9 @@ export interface PublicRoom {
 
 export interface BuyInOtpItem {
   id: string;
-  roomId: string;
+  roomSlug: string;
   playerId: string;
+  playerUid: string;
   playerName: string;
   batchId: string;
   otpCode: string; // 4-digit string "0000"-"9999"
@@ -25,10 +28,11 @@ export interface BuyInOtpItem {
 
 export interface PlayerRunningSummary {
   id: string;
+  uid: string;
   displayName: string;
   joinedAt: string;
-  buyInCount: number; // Active buy-ins count
-  runningTotal: number; // Sum of active buy-ins
+  buyInCount: number;
+  runningTotal: number;
   buyIns: BuyInOtpItem[]; // Newest first
 }
 
@@ -58,6 +62,7 @@ export interface PlayerRoomSnapshot {
     buyInCount: number;
     runningTotal: number;
   }>;
+  isAlsoHost: boolean;
   serverTime: string;
 }
 
@@ -65,6 +70,7 @@ export interface GuestRoomSnapshot {
   role: "GUEST";
   room: PublicRoom;
   totals: RoomTotals;
+  isAlsoHost: boolean;
   serverTime: string;
 }
 

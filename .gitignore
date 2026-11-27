@@ -44,3 +44,8 @@ next-env.d.ts
 *.db
 *.db-shm
 *.db-wal
+
+# Static export output & Firebase local cache
+/out
+.firebase/
+firebase-debug.log*

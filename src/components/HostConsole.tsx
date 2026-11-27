@@ -22,8 +22,12 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { useRoomStream } from "@/hooks/useRoomStream";
-import { toRoomSlug } from "@/lib/codes";
-import { useIsHydrated, useStoredHostToken } from "@/lib/session";
+import { toRoomSlug, withBasePath } from "@/lib/codes";
+import {
+  setRoomClosureInFirestore,
+  toggleBuyInVoidInFirestore,
+} from "@/lib/firestore-service";
+import { useIsHydrated } from "@/lib/session";
 import {
   formatClockTime,
   formatDateTime,
@@ -31,7 +35,7 @@ import {
   formatMoney,
 } from "@/lib/format";
 import { downloadRoomSummaryPdf } from "@/lib/pdf-report";
-import type { HostRoomSnapshot } from "@/lib/types";
+import type { GuestRoomSnapshot, HostRoomSnapshot } from "@/lib/types";
 
 interface HostConsoleProps {
   roomCode: string;
@@ -41,7 +45,6 @@ interface HostConsoleProps {
 interface DemoRosterItem {
   seatAlias: string;
   displayName: string;
-  playerToken: string;
 }
 
 export function HostConsole({
@@ -50,7 +53,6 @@ export function HostConsole({
 }: HostConsoleProps) {
   const slug = toRoomSlug(roomCode);
   const hydrated = useIsHydrated();
-  const hostToken = useStoredHostToken(slug);
 
   const [otpSearch, setOtpSearch] = useState("");
   const [copiedId, setCopiedId] = useState(false);
@@ -71,12 +73,13 @@ export function HostConsole({
     }
   }, [hydrated, slug]);
 
-  const { snapshot, error, loading, connectionState, refresh } =
-    useRoomStream<HostRoomSnapshot>({
-      roomCode: slug,
-      hostToken,
-      enabled: hydrated && Boolean(hostToken),
-    });
+  const { snapshot, error, loading, connectionState } = useRoomStream<
+    HostRoomSnapshot | GuestRoomSnapshot
+  >({
+    roomCode: slug,
+    viewRole: "HOST",
+    enabled: hydrated && Boolean(slug),
+  });
 
   const filteredOtps = useMemo(() => {
     if (!snapshot || snapshot.role !== "HOST") return [];
@@ -100,33 +103,24 @@ export function HostConsole({
   async function copyJoinLink() {
     if (!snapshot) return;
     try {
-      const url = `${window.location.origin}/room/${encodeURIComponent(
-        snapshot.room.roomSlug
-      )}`;
+      const path = withBasePath(
+        `/room/?room=${encodeURIComponent(snapshot.room.roomSlug)}`
+      );
+      const url = `${window.location.origin}${path}`;
       await navigator.clipboard.writeText(url);
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 1800);
     } catch {}
   }
 
-  async function handleToggleVoid(buyInId: string, voided: boolean) {
-    if (!hostToken) return;
-    setBusyId(buyInId);
+  async function handleToggleVoid(otpCode: string, voided: boolean) {
+    setBusyId(otpCode);
     try {
-      await fetch(
-        `/api/rooms/${encodeURIComponent(
-          slug
-        )}/buy-ins/${encodeURIComponent(buyInId)}/void`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-host-token": hostToken,
-          },
-          body: JSON.stringify({ voided }),
-        }
-      );
-      void refresh();
+      await toggleBuyInVoidInFirestore({
+        roomIdOrName: slug,
+        otpCode,
+        voided,
+      });
     } finally {
       setBusyId(null);
     }
@@ -136,87 +130,34 @@ export function HostConsole({
     action: "CLOSE" | "REOPEN",
     autoDownloadPdf = false
   ) {
-    if (!hostToken || !snapshot) return;
+    if (!snapshot || snapshot.role !== "HOST") return;
     setCloseLoading(true);
     try {
-      const res = await fetch(`/api/rooms/${encodeURIComponent(slug)}/close`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-host-token": hostToken,
-        },
-        body: JSON.stringify({ action }),
+      const updatedRoom = await setRoomClosureInFirestore({
+        roomIdOrName: slug,
+        action,
       });
-      const data = await res.json();
-      if (res.ok) {
-        closeDialogRef.current?.close();
-        await refresh();
-        if (autoDownloadPdf && data.room) {
-          downloadRoomSummaryPdf({
-            ...snapshot,
-            room: data.room,
-          });
-        }
+      closeDialogRef.current?.close();
+      if (autoDownloadPdf) {
+        downloadRoomSummaryPdf({
+          ...snapshot,
+          room: updatedRoom,
+        });
       }
     } finally {
       setCloseLoading(false);
     }
   }
 
-  if (!hydrated) {
+  if (!hydrated || (loading && !snapshot)) {
     return (
       <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">
-        Restoring host console...
+        Connecting to Host Console...
       </div>
     );
   }
 
-  if (!hostToken || (snapshot && snapshot.role !== "HOST")) {
-    return (
-      <main className="max-w-md mx-auto px-4 py-16 text-center">
-        <div className="rounded-3xl bg-slate-900 border border-slate-800 p-6 space-y-4">
-          <div className="w-12 h-12 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 mx-auto">
-            <Lock className="w-6 h-6" />
-          </div>
-          <h1 className="text-xl font-bold text-white">
-            Host Session Not Found
-          </h1>
-          <p className="text-sm text-slate-400">
-            This browser doesn&apos;t hold the host token for room{" "}
-            <span className="font-mono text-white font-semibold">
-              {roomCode}
-            </span>
-            .
-          </p>
-          <div className="flex flex-col gap-2.5 pt-2">
-            <Link
-              href={`/room/${encodeURIComponent(slug)}`}
-              className="min-h-[48px] rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition"
-            >
-              Join Room as Player
-              <ArrowRight className="w-4 h-4" />
-            </Link>
-            <Link
-              href="/"
-              className="min-h-[46px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm flex items-center justify-center transition"
-            >
-              Back to Home
-            </Link>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  if (loading && !snapshot) {
-    return (
-      <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">
-        Loading Host Console...
-      </div>
-    );
-  }
-
-  if (error || !snapshot) {
+  if (!slug || error || !snapshot) {
     return (
       <main className="max-w-md mx-auto px-4 py-16 text-center">
         <div className="rounded-3xl bg-slate-900 border border-slate-800 p-6 space-y-4">
@@ -229,6 +170,43 @@ export function HostConsole({
           >
             Return Home
           </Link>
+        </div>
+      </main>
+    );
+  }
+
+  if (snapshot.role !== "HOST") {
+    return (
+      <main className="max-w-md mx-auto px-4 py-16 text-center">
+        <div className="rounded-3xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 mx-auto">
+            <Lock className="w-6 h-6" />
+          </div>
+          <h1 className="text-xl font-bold text-white">
+            Host Access Restricted
+          </h1>
+          <p className="text-sm text-slate-400">
+            Only the device that created room{" "}
+            <span className="font-mono text-white font-semibold">
+              {snapshot.room.roomName}
+            </span>{" "}
+            can manage the Host Console.
+          </p>
+          <div className="flex flex-col gap-2.5 pt-2">
+            <Link
+              href={`/room?room=${encodeURIComponent(slug)}`}
+              className="min-h-[48px] rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition"
+            >
+              Join Room as Player
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+            <Link
+              href="/"
+              className="min-h-[46px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm flex items-center justify-center transition"
+            >
+              Back to Home
+            </Link>
+          </div>
         </div>
       </main>
     );
@@ -396,11 +374,11 @@ export function HostConsole({
             {demoRoster.map((dp) => (
               <a
                 key={dp.seatAlias}
-                href={`/room/${encodeURIComponent(
-                  room.roomSlug
-                )}?seat=${encodeURIComponent(
-                  dp.seatAlias
-                )}&token=${encodeURIComponent(dp.playerToken)}`}
+                href={withBasePath(
+                  `/room/?room=${encodeURIComponent(
+                    room.roomSlug
+                  )}&seat=${encodeURIComponent(dp.seatAlias)}`
+                )}
                 target="_blank"
                 rel="noreferrer"
                 className="min-h-[34px] px-2.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-emerald-500/30 text-xs font-semibold text-white inline-flex items-center gap-1 transition"
@@ -410,9 +388,11 @@ export function HostConsole({
               </a>
             ))}
             <a
-              href={`/room/${encodeURIComponent(room.roomSlug)}?seat=player-${
-                totals.playerCount + 1
-              }`}
+              href={withBasePath(
+                `/room/?room=${encodeURIComponent(room.roomSlug)}&seat=player-${
+                  totals.playerCount + 1
+                }`
+              )}
               target="_blank"
               rel="noreferrer"
               className="min-h-[34px] px-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-xs font-bold text-slate-950 inline-flex items-center gap-1 transition"
@@ -519,7 +499,7 @@ export function HostConsole({
         </div>
       </section>
 
-      {/* PLAYERS & RUNNING TOTALS (PRIMARY SECTION) */}
+      {/* PLAYERS & RUNNING TOTALS */}
       <section className="rounded-3xl bg-slate-900/90 border border-slate-800 p-4 sm:p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
           <div>
@@ -589,7 +569,6 @@ export function HostConsole({
                     </div>
                   </div>
 
-                  {/* Timestamped 4-Digit OTP Chips */}
                   <div className="mt-3 pt-3 border-t border-slate-800/80">
                     {activeOtps.length === 0 ? (
                       <span className="text-xs text-slate-500">
@@ -710,8 +689,10 @@ export function HostConsole({
                   {!isClosed && (
                     <button
                       type="button"
-                      disabled={busyId === item.id}
-                      onClick={() => handleToggleVoid(item.id, !isVoided)}
+                      disabled={busyId === item.otpCode}
+                      onClick={() =>
+                        handleToggleVoid(item.otpCode, !isVoided)
+                      }
                       className={`min-h-[36px] px-3 rounded-xl text-xs font-semibold inline-flex items-center gap-1 transition cursor-pointer shrink-0 ${
                         isVoided
                           ? "bg-slate-800 hover:bg-slate-700 text-emerald-300"
@@ -823,7 +804,7 @@ export function HostConsole({
           Open Simulated Player Tabs
         </h1>
         <p className="text-xs text-slate-400 mt-1">
-          Each link opens an isolated player session so you can test multiple
+          Each link opens an isolated player seat so you can test multiple
           players side-by-side in the same browser window.
         </p>
 
@@ -831,7 +812,9 @@ export function HostConsole({
           {["seat1", "seat2", "seat3"].map((slot, idx) => (
             <a
               key={slot}
-              href={`/room/${encodeURIComponent(room.roomSlug)}?seat=${slot}`}
+              href={withBasePath(
+                `/room/?room=${encodeURIComponent(room.roomSlug)}&seat=${slot}`
+              )}
               target="_blank"
               rel="noreferrer"
               className="w-full min-h-[44px] rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 px-3.5 flex items-center justify-between text-sm font-semibold text-emerald-300 transition"
